@@ -6,7 +6,7 @@
 > **Bluetooth via the Rokid AI glasses SDK** (`pod 'RokidSDK' ~> 1.10.2`).
 > No Wi-Fi port forwarding is needed. See **SDK Setup** below.
 
-iOS app that fetches **live scores from ESPN** (free, no API key) and streams them to **Rokid AR glasses** via TCP :8093.
+iOS app that fetches **live scores from ESPN** (free, no API key) and streams them to **Rokid AR glasses** via Bluetooth/RokidSDK.
 
 ```
 ESPN API (free) ──HTTPS──▶ iPhone (RokidSports) ──Bluetooth/RokidSDK──▶ Rokid Glasses
@@ -27,7 +27,7 @@ ESPN API (free) ──HTTPS──▶ iPhone (RokidSports) ──Bluetooth/RokidS
 | 🏀 WNBA | Basketball |
 | 🏈 CFL | Canadian Football |
 
-## What's displayed on the glasses (TCP :8093)
+## What's displayed on the glasses
 
 ```json
 {"type":"scores","text":"NYG 17 – DAL 21 (Q3 8:45)  |  LAL 98 – GSW 102 (4th)","count":8}
@@ -75,7 +75,7 @@ The only thing left for each app is filling in the three credential constants (`
 
 ## Setup
 
-1. Open `RokidSports.xcodeproj` in Xcode 15+.
+1. Open `RokidSports.xcworkspace` in Xcode 15+ (after running `pod install`) 15+.
 2. Set your team in Signing & Capabilities.
 3. Build and run on iPhone (iOS 17+).
 4. Grant local network permission when prompted.
@@ -94,4 +94,4 @@ https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard
 
 - iOS 17.0+
 - Xcode 15+
-- Rokid AR glasses on the same Wi-Fi (optional)
+- Rokid AI glasses (paired via Bluetooth — no Wi-Fi needed) (optional)
