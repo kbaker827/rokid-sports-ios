@@ -1,9 +1,15 @@
 # Rokid Sports HUD
 
+
+> **🔵 Connectivity Update — May 2025**
+> The glasses connection has been migrated from **raw TCP sockets** to
+> **Bluetooth via the Rokid AI glasses SDK** (`pod 'RokidSDK' ~> 1.10.2`).
+> No Wi-Fi port forwarding is needed. See **SDK Setup** below.
+
 iOS app that fetches **live scores from ESPN** (free, no API key) and streams them to **Rokid AR glasses** via TCP :8093.
 
 ```
-ESPN API (free) ──HTTPS──▶ iPhone (RokidSports) ──TCP :8093──▶ Rokid Glasses
+ESPN API (free) ──HTTPS──▶ iPhone (RokidSports) ──Bluetooth/RokidSDK──▶ Rokid Glasses
 ```
 
 ## Supported leagues
