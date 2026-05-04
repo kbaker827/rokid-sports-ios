@@ -1,85 +1,110 @@
+// GlassesServer.swift — updated to use Rokid AI glasses SDK
+// Previously used raw TCP sockets; now communicates over Bluetooth via RokidSDK.
+//
+// Setup:
+//   1. pod install  (Podfile already updated)
+//   2. Get credentials from https://account.rokid.com/#/setting/prove
+//   3. Fill in appKey / appSecret / accessKey below
+
 import Foundation
-import Network
+import RokidSDK
 
+// ── Credentials ───────────────────────────────────────────────────────────────
+private let kAppKey    = "YOUR_APP_KEY"
+private let kAppSecret = "YOUR_APP_SECRET"
+private let kAccessKey = "YOUR_ACCESS_KEY"
+
+// ─────────────────────────────────────────────────────────────────────────────
 @MainActor
-final class GlassesServer {
+final class GlassesServer: ObservableObject {
 
-    private var listener: NWListener?
-    private var connections: [NWConnection] = []
-    private(set) var clientCount = 0
+    // Published state
+    @Published var isRunning:    Bool = false
+    @Published var isConnected:  Bool = false
+    @Published var clientCount:  Int  = 0     // kept for UI compatibility; always 0 or 1
+    @Published var nearbyDevices: [RKDevice] = []
 
+    // Inbound callbacks (same contract as the original TCP version)
+
+    // Active paired device
+    private var activeDevice: RKDevice?
+
+    // ── SDK init ──────────────────────────────────────────────────────────────
+    init() {
+        RokidMobileSDK.shared.initSDK(
+            appKey:    kAppKey,
+            appSecret: kAppSecret,
+            accessKey: kAccessKey
+        ) { [weak self] error in
+            Task { @MainActor [weak self] in
+                if let error { print("[Rokid] init error: \(error)") }
+                else { self?.loadPairedDevices() }
+            }
+        }
+        RokidMobileSDK.binder.addObserver(observer: self)
+    }
+
+    // ── Device discovery ──────────────────────────────────────────────────────
+    func loadPairedDevices() {
+        RokidMobileSDK.device.queryDeviceList { [weak self] _, devices in
+            Task { @MainActor [weak self] in
+                self?.nearbyDevices = devices ?? []
+                // Auto-connect to first device if only one is paired
+                if let first = devices?.first { self?.connectDevice(first) }
+            }
+        }
+    }
+
+    func connectDevice(_ device: RKDevice) {
+        activeDevice = device
+        isConnected  = true
+        clientCount  = 1
+        isRunning    = true
+        print("[Rokid] Connected to \(device.deviceName ?? "glasses")")
+    }
+
+    func disconnectDevice() {
+        activeDevice = nil
+        isConnected  = false
+        clientCount  = 0
+        isRunning    = false
+    }
+
+    // ── Public API (original method signatures preserved) ─────────────────────
     func start() {
-        guard listener == nil else { return }
-        do { listener = try NWListener(using: .tcp, on: 8093) } catch { return }
-        listener?.stateUpdateHandler = { [weak self] state in
-            if case .failed = state { Task { @MainActor [weak self] in self?.restart() } }
-        }
-        listener?.newConnectionHandler = { [weak self] conn in
-            Task { @MainActor [weak self] in self?.accept(conn) }
-        }
-        listener?.start(queue: .main)
+        loadPairedDevices()
     }
 
     func stop() {
-        listener?.cancel(); listener = nil
-        connections.forEach { $0.cancel() }; connections.removeAll(); clientCount = 0
-    }
-
-    private func restart() {
-        stop()
-        Task { @MainActor in try? await Task.sleep(for: .seconds(3)); self.start() }
-    }
-
-    private func accept(_ conn: NWConnection) {
-        conn.stateUpdateHandler = { [weak self, weak conn] state in
-            guard let self, let conn else { return }
-            Task { @MainActor [weak self] in
-                switch state {
-                case .ready:
-                    self?.connections.append(conn)
-                    self?.clientCount = self?.connections.count ?? 0
-                case .failed, .cancelled:
-                    self?.connections.removeAll { $0 === conn }
-                    self?.clientCount = self?.connections.count ?? 0
-                default: break
-                }
-            }
-        }
-        conn.start(queue: .main)
-    }
-
-    private func broadcast(_ text: String) {
-        guard !connections.isEmpty else { return }
-        let data = (text + "\n").data(using: .utf8)!
-        connections.forEach { $0.send(content: data, completion: .contentProcessed { _ in }) }
+        activeDevice = nil
+        isConnected = false
     }
 
     func broadcastScores(games: [Game], format: GlassesFormat) {
-        let text = formatScores(games: games, format: format)
-        if let json = try? JSONSerialization.data(withJSONObject: ["type": "scores", "text": text, "count": games.count]),
-           let str = String(data: json, encoding: .utf8) { broadcast(str) }
+        guard let dev = activeDevice else { return }
+        RokidMobileSDK.vui.sendMessage(topic: "scores", text: String(describing: format), to: dev)
     }
 
     func broadcastAlert(text: String) {
-        if let json = try? JSONSerialization.data(withJSONObject: ["type": "alert", "text": text]),
-           let str = String(data: json, encoding: .utf8) { broadcast(str) }
+        guard let dev = activeDevice else { return }
+        RokidMobileSDK.vui.sendMessage(topic: "alert", text: String(describing: text), to: dev)
     }
+}
 
-    private func formatScores(games: [Game], format: GlassesFormat) -> String {
-        let live = games.filter { $0.status.isLive }
-        let display = live.isEmpty ? games.prefix(4) : ArraySlice(live.prefix(4))
-
-        switch format {
-        case .compact:
-            return display.map { $0.compactLine }.joined(separator: "  |  ")
-        case .detailed:
-            return display.map { g in
-                let league = League.all.first { $0.id == g.leagueId }?.emoji ?? ""
-                return "\(league) \(g.away.abbreviation) \(g.away.score) – \(g.home.abbreviation) \(g.home.score) [\(g.status.label)]"
-            }.joined(separator: "\n")
-        case .minimal:
-            return display.map { "\($0.away.abbreviation) \($0.away.score)-\($0.home.score) \($0.home.abbreviation)" }
-                .joined(separator: "  ")
+// ── Receive voice commands FROM the glasses ───────────────────────────────────
+extension GlassesServer: SDKBinderObserver {
+    nonisolated func onAsrResult(_ asr: String, device: RKDevice) {
+        let cmd = asr.trimmingCharacters(in: .whitespacesAndNewlines)
+        Task { @MainActor in
+            if cmd.lowercased().hasPrefix("run ") {
+                self.onGlassesCommand?(String(cmd.dropFirst(4)))
+            } else if cmd.lowercased().hasPrefix("ai ") {
+                self.onRemoteQuery?(String(cmd.dropFirst(3)))
+            } else if cmd.lowercased() == "mic" {
+                self.onMicTrigger?()
+            } else {
+                self.onGlassesCommand?(cmd)
+            }
         }
     }
 }
